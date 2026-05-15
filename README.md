@@ -19,7 +19,13 @@ agentic-engineer-ep06-mcp-apps-demo/
 ├── README.md                            ← this file
 ├── package.json                         ← Node + tsx; no build step
 ├── tsconfig.json
+├── playwright.config.ts                 ← config for `npm run test:visual`
 ├── claude-desktop-config.snippet.json   ← copy-paste Claude Desktop wiring
+├── scripts/
+│   ├── smoke.sh                         ← Layer 1: JSON-RPC protocol regression
+│   └── inspect.sh                       ← Layer 3: MCPJam Inspector launcher
+├── tests/
+│   └── widget-render.spec.ts            ← Layer 2: headless DOM assertions (custom MCP Apps host)
 └── src/
     ├── index.ts                         ← MCP server (stdio transport)
     ├── data/
@@ -54,12 +60,67 @@ A successful smoke run prints `✓ all checks passed`.
 
 ## Testing without Claude Desktop
 
-Two ways to exercise the server end-to-end before — and instead of — wiring it into Claude Desktop:
+A demo that ships only "how to build" widgets is half the story. **You shouldn't need Claude Desktop or any production host to know your widgets work** — and this repo ships three layers of testing that prove it, going from fast/headless to interactive/visual. Pick whichever matches the kind of bug you're chasing.
 
-| | What it does | When to use |
-|---|---|---|
-| `npm run smoke` | Drives the full demo flow over raw JSON-RPC: `initialize` → `search_products` (budget) → `resources/read` → `add_to_cart` → `checkout` → `search_products` (premium) → `resources/read`. Asserts that each search rotates to a fresh slot URI, the right products land in each carousel, and the cart / confirmation fragments render with the right totals. **22 assertions, no browser.** | CI gate, regression checks, fast inner loop. Catches the two bugs the demo log surfaced: stale-resource caching across calls and the speculative-read race. |
-| `npm run inspect` | Launches [MCPJam Inspector](https://github.com/MCPJam/inspector) — a community MCP Apps client that implements the full SEP-1865 lifecycle (`ui/initialize`, size-changed, widget-initiated `tools/call` over postMessage, iframe rendering). Paste the printed stdio command into its UI to wire it to this server. | Visual / interactive testing. Closest drop-in for Claude Desktop without the ⌘Q-and-reopen dance after every code change. Click the buttons inside the carousel, see the cart inject inline. |
+### Layer 1 — `npm run smoke` · JSON-RPC protocol regression
+
+```bash
+npm run smoke
+```
+
+A bash script that drives the full demo flow over raw JSON-RPC: `initialize` → `search_products` (budget) → `resources/read` → `add_to_cart` → `checkout` → `search_products` (premium) → `resources/read` → bootstrap re-read. **24 assertions in ~8 seconds, no browser, CI-friendly.**
+
+Catches: protocol contract bugs, parameter handling, slot URI rotation, the stale-cache class of bugs, the speculative-read race (when a host fires `resources/read` mid-flight before the tool's `await sleep(…)` completes).
+
+Doesn't catch: anything that depends on rendering — broken HTML, broken CSS, JS errors in the widget itself.
+
+### Layer 2 — `npm run test:visual` · headless DOM assertions
+
+```bash
+npm run test:visual:install    # first time only — downloads Chromium (~150MB)
+npm run test:visual
+```
+
+A standalone Playwright spec (`tests/widget-render.spec.ts`) that **acts as a minimal MCP Apps host of its own** — it spawns this server over stdio, exchanges JSON-RPC, pulls the rendered carousel HTML out of `resources/read`, loads it into a real headless Chromium page, and asserts on the DOM (product names visible, cart fragment present, totals correct, premium products *not* leaking into a budget search, etc.).
+
+It's intentionally short (~250 lines, no production dependencies beyond `@playwright/test`) and meant to be read as a **reference implementation for testing your own MCP Apps widgets**. The custom stdio host class is reusable — copy `tests/widget-render.spec.ts` into any MCP Apps project and adapt.
+
+Catches: HTML structure regressions, missing or mis-rendered products, broken totals, slot URI contract violations.
+
+Doesn't catch: the full iframe sandbox, `postMessage` routing, widget-initiated `tools/call` round-trips. Those need a real host.
+
+### Layer 3 — `npm run inspect` · interactive visual sandbox in [MCPJam Inspector](https://github.com/MCPJam/inspector)
+
+```bash
+npm run inspect
+```
+
+Launches MCPJam Inspector — a community-built MCP Apps client that implements the full SEP-1865 lifecycle: `ui/initialize`, `ui/notifications/size-changed`, widget-initiated `tools/call` over `postMessage`, double-iframe sandboxing, the works. Drop-in replacement for Claude Desktop during iteration (no ⌘Q-and-reopen dance after every code change). The launcher prints the absolute stdio command to paste into the MCPJam UI.
+
+Catches: the full widget lifecycle, sandbox quirks, postMessage routing, interactive behaviors like clicking "Add to cart" inside the carousel and seeing the cart fragment inject inline.
+
+Doesn't catch: regressions automatically — it's an interactive tool, not an assertion test.
+
+### Which layer catches which bug
+
+| Bug class | smoke | test:visual | inspect |
+|---|:-:|:-:|:-:|
+| Protocol / JSON-RPC contract | ✅ | ✅ | – |
+| Cache-bust slot rotation | ✅ | ✅ | – |
+| Speculative-read race | ✅ | – | – |
+| HTML rendering / DOM structure | – | ✅ | ✅ |
+| CSS layout, fonts, spacing | – | partial | ✅ |
+| Widget-initiated `tools/call` over postMessage | – | – | ✅ |
+| iframe sandbox / CSP | – | – | ✅ |
+
+**Recommended workflow:** smoke + test:visual as your CI gate, inspect as your local dev loop. Claude Desktop only after all three are green.
+
+### Real bugs each layer caught during ep06 production
+
+- **smoke caught**: a speculative-read race (Claude Desktop fires `resources/read` ~20ms after `tools/call`, before the server's `await sleep(…)` has populated `widgetState`) plus a stale-URI cache miss across two consecutive searches in one session.
+- **inspect caught**: MCPJam follows the tool *definition's* static `_meta.ui.resourceUri` and ignores the per-call result override — so per-call slot rotation alone wasn't enough. The "also keep the bootstrap slot in sync" belt-and-suspenders fix came from clicking through the inspector and watching a premium query render the previous budget carousel.
+
+Without layers 2 and 3, both bugs would have shipped to YouTube viewers cloning the repo on a different machine and hitting them cold.
 
 ## Wire it into Claude Desktop
 

@@ -4,3 +4,7 @@ bun.lockb
 .env.local
 .DS_Store
 dist/
+
+# Playwright artifacts from `npm run test:visual`
+test-results/
+playwright-report/

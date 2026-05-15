@@ -128,9 +128,17 @@ registerAppTool(
     // Rotate to a fresh URI slot so Claude Desktop doesn't serve a cached
     // body for the previous search. Write state BEFORE the simulated sleep
     // so a speculative `resources/read` mid-flight sees the new carousel.
+    const carousel = productCarouselHtml(matches, query);
     const slotUri = SEARCH_URI_POOL[searchCounter % SEARCH_URI_POOL_SIZE];
     searchCounter++;
-    widgetState[slotUri] = productCarouselHtml(matches, query);
+    widgetState[slotUri] = carousel;
+    // Belt-and-suspenders: also keep the bootstrap slot in sync with the
+    // latest search. Some MCP Apps clients (MCPJam Inspector, observed on
+    // 2026-05-15) follow the tool DEFINITION's static `_meta.ui.resourceUri`
+    // and ignore per-call result overrides — they'd otherwise keep
+    // re-rendering the very first carousel forever. Clients that DO honor
+    // per-call overrides (Claude Desktop) still get fresh, cache-busted URIs.
+    widgetState[URI_SEARCH_BOOTSTRAP] = carousel;
     await sleep(LATENCY_MS.search);
     return {
       content: [

@@ -46,6 +46,11 @@ trap 'rm -f "$OUT"' EXIT
   sleep 1
   # 6. Fetch the slot-1 carousel
   printf '{"jsonrpc":"2.0","id":9,"method":"resources/read","params":{"uri":"ui://agentic-engineer-storefront/widgets/search/v1"}}\n'
+  sleep 1
+  # 7. Re-fetch the bootstrap slot — MCPJam Inspector follows the
+  # tool-definition's static resourceUri, so v0 must mirror the latest
+  # search result (premium), not the first one (budget).
+  printf '{"jsonrpc":"2.0","id":10,"method":"resources/read","params":{"uri":"ui://agentic-engineer-storefront/widgets/search/v0"}}\n'
   sleep 2
 ) | npx tsx src/index.ts > "$OUT" 2>&1 &
 PID=$!
@@ -86,19 +91,18 @@ check 'text/html;profile=mcp-app' "MCP Apps MIME type negotiated"
 check '"resourceUri":"ui://agentic-engineer-storefront/widgets/search/v0"' "first search advertises slot v0"
 check '"resourceUri":"ui://agentic-engineer-storefront/widgets/search/v1"' "second search advertises slot v1 (cache-bust)"
 
-# --- Budget carousel (slot v0) contains the budget products ------------------
-check 'Trail Runner' "slot-v0 carousel has Trail Runner (\$58)"
-check 'Cloud Marathon' "slot-v0 carousel has Cloud Marathon (\$54)"
-check 'Urban Step' "slot-v0 carousel has Urban Step (\$42)"
-# And does NOT show the premium products
-# (these names cannot appear anywhere before the premium tool call, so a
-#  positive match here means we leaked them into the budget carousel)
-budget_carousel=$(sed -n '/"id":5,/,/"id":6,/p' "$OUT" || true)
-if echo "$budget_carousel" | grep -q 'Pacer Pro\|Sunrise 7\|Speed Lite Black'; then
+# --- Budget carousel (read via id=5 → ui://...search/v0) ---------------------
+# Each JSON-RPC message lives on its own line, so we can isolate the response
+# for a specific request id without false matches across messages.
+v0_response_budget=$(grep -E '"id":5[^0-9]' "$OUT" | head -1)
+echo "$v0_response_budget" | grep -q 'Trail Runner'   && echo "✓ slot-v0 carousel has Trail Runner (\$58)"    || { echo "✗ slot-v0 missing Trail Runner"; fail=1; }
+echo "$v0_response_budget" | grep -q 'Cloud Marathon' && echo "✓ slot-v0 carousel has Cloud Marathon (\$54)"  || { echo "✗ slot-v0 missing Cloud Marathon"; fail=1; }
+echo "$v0_response_budget" | grep -q 'Urban Step'     && echo "✓ slot-v0 carousel has Urban Step (\$42)"      || { echo "✗ slot-v0 missing Urban Step"; fail=1; }
+if echo "$v0_response_budget" | grep -q 'Pacer Pro\|Sunrise 7\|Speed Lite Black'; then
   echo "✗ slot-v0 carousel leaked premium products"
   fail=1
 else
-  echo "✓ slot-v0 carousel contains no premium products"
+  echo "✓ slot-v0 (budget read) contains no premium products"
 fi
 
 # --- Add to cart returns embedded fragment -----------------------------------
@@ -111,17 +115,33 @@ check 'Order ord_' "checkout returns order id"
 check 'Charged \$54.00' "checkout charges the cart total"
 check 'confirmation-card' "checkout embeds confirmation fragment"
 
-# --- Premium carousel (slot v1) contains the premium products ----------------
-check 'Sunrise 7' "slot-v1 carousel has Sunrise 7 (\$67)"
-check 'Speed Lite Black' "slot-v1 carousel has Speed Lite Black (\$79)"
-check 'Pacer Pro' "slot-v1 carousel has Pacer Pro (\$89)"
-# And does NOT recycle the budget products
-premium_carousel=$(sed -n '/"id":9,/,$p' "$OUT" || true)
-if echo "$premium_carousel" | grep -q 'Trail Runner\|Cloud Marathon\|Urban Step'; then
+# --- Premium carousel (read via id=9 → ui://...search/v1) --------------------
+v1_response=$(grep -E '"id":9[^0-9]' "$OUT" | head -1)
+echo "$v1_response" | grep -q 'Sunrise 7'        && echo "✓ slot-v1 carousel has Sunrise 7 (\$67)"        || { echo "✗ slot-v1 missing Sunrise 7"; fail=1; }
+echo "$v1_response" | grep -q 'Speed Lite Black' && echo "✓ slot-v1 carousel has Speed Lite Black (\$79)" || { echo "✗ slot-v1 missing Speed Lite Black"; fail=1; }
+echo "$v1_response" | grep -q 'Pacer Pro'        && echo "✓ slot-v1 carousel has Pacer Pro (\$89)"        || { echo "✗ slot-v1 missing Pacer Pro"; fail=1; }
+if echo "$v1_response" | grep -q 'Trail Runner\|Cloud Marathon\|Urban Step'; then
   echo "✗ slot-v1 carousel leaked budget products"
   fail=1
 else
   echo "✓ slot-v1 carousel contains no budget products"
+fi
+
+# --- Bootstrap slot v0 must mirror the LATEST search (premium) after the
+# premium call, so MCPJam-style clients that follow the tool-definition's
+# static resourceUri see fresh state instead of the first carousel forever.
+v0_response_latest=$(grep -E '"id":10[^0-9]' "$OUT" | head -1)
+if echo "$v0_response_latest" | grep -q 'Sunrise 7' && echo "$v0_response_latest" | grep -q 'Pacer Pro'; then
+  echo "✓ slot-v0 bootstrap re-read reflects latest search (premium)"
+else
+  echo "✗ slot-v0 bootstrap did not update to latest search"
+  fail=1
+fi
+if echo "$v0_response_latest" | grep -q 'Trail Runner\|Cloud Marathon\|Urban Step'; then
+  echo "✗ slot-v0 bootstrap still shows stale budget products"
+  fail=1
+else
+  echo "✓ slot-v0 bootstrap re-read no longer shows stale budget carousel"
 fi
 
 # --- Regression: race condition. If we observe the empty placeholder text

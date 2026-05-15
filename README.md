@@ -52,6 +52,15 @@ npm run smoke         # verifies the stdio handshake end-to-end
 
 A successful smoke run prints `✓ all checks passed`.
 
+## Testing without Claude Desktop
+
+Two ways to exercise the server end-to-end before — and instead of — wiring it into Claude Desktop:
+
+| | What it does | When to use |
+|---|---|---|
+| `npm run smoke` | Drives the full demo flow over raw JSON-RPC: `initialize` → `search_products` (budget) → `resources/read` → `add_to_cart` → `checkout` → `search_products` (premium) → `resources/read`. Asserts that each search rotates to a fresh slot URI, the right products land in each carousel, and the cart / confirmation fragments render with the right totals. **22 assertions, no browser.** | CI gate, regression checks, fast inner loop. Catches the two bugs the demo log surfaced: stale-resource caching across calls and the speculative-read race. |
+| `npm run inspect` | Launches [MCPJam Inspector](https://github.com/MCPJam/inspector) — a community MCP Apps client that implements the full SEP-1865 lifecycle (`ui/initialize`, size-changed, widget-initiated `tools/call` over postMessage, iframe rendering). Paste the printed stdio command into its UI to wire it to this server. | Visual / interactive testing. Closest drop-in for Claude Desktop without the ⌘Q-and-reopen dance after every code change. Click the buttons inside the carousel, see the cart inject inline. |
+
 ## Wire it into Claude Desktop
 
 1. Open `~/Library/Application Support/Claude/claude_desktop_config.json` (create it if missing).

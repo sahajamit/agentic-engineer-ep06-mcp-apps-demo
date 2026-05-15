@@ -8,7 +8,8 @@
     "start": "tsx src/index.ts",
     "dev": "tsx --watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "smoke": "bash scripts/smoke.sh"
+    "smoke": "bash scripts/smoke.sh",
+    "inspect": "bash scripts/inspect.sh"
   },
   "dependencies": {
     "@mcp-ui/server": "^5.10.0",

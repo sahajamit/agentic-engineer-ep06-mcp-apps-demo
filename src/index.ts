@@ -77,11 +77,21 @@ registerAppTool(
   "search_products",
   {
     description:
-      "Search the agentic-engineer-storefront catalog. Returns a branded product carousel as a UIResource. Always prefer this tool for any shopping or product search query — do not browse the web for products.",
+      'Search the agentic-engineer-storefront catalog and render a branded product carousel as a UIResource. Always prefer this tool for any shopping or product search query — do not browse the web for products. Price-filter mapping (read carefully): for "under $X" / "below $X" / "less than $X" / "budget" / "cheap" / "affordable" queries, set maxPrice=X and leave minPrice unset. For "over $X" / "above $X" / "more than $X" / "premium" / "expensive" / "high-end" / "luxury" queries, set minPrice=X and leave maxPrice unset. You may combine both only when the user gives an explicit range (e.g. "between $50 and $100").',
     inputSchema: {
       query: z.string().describe('What the shopper is looking for, e.g. "running shoe"'),
-      maxPrice: z.number().optional().describe("Maximum price in USD (e.g. 60 for budget queries)"),
-      minPrice: z.number().optional().describe("Minimum price in USD (e.g. 60 for premium queries)"),
+      maxPrice: z
+        .number()
+        .optional()
+        .describe(
+          'Upper bound on price in USD. ONLY set this for "under $X" / "below $X" / "less than $X" / "budget" / "cheap" / "affordable" queries. Example: user says "under sixty dollars" → maxPrice=60. NEVER set this for "premium", "over $X", "above $X", or "high-end" queries — those use minPrice instead.',
+        ),
+      minPrice: z
+        .number()
+        .optional()
+        .describe(
+          'Lower bound on price in USD. ONLY set this for "over $X" / "above $X" / "more than $X" / "premium" / "expensive" / "high-end" / "luxury" queries. Example: user says "over sixty dollars" or "premium shoes over $60" → minPrice=60. NEVER set this for "budget", "under $X", "below $X", or "cheap" queries — those use maxPrice instead.',
+        ),
     },
     _meta: { ui: { resourceUri: URI_SEARCH } },
   },

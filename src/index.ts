@@ -27,15 +27,37 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // _meta.ui.resourceUri on each tool result and calls resources/read to fetch
 // the current HTML. Each tool below mutates server state, then the resource
 // callback returns the latest HTML on read.
-const URI_SEARCH = "ui://agentic-engineer-storefront/widgets/search";
+//
+// Search uses a POOL of versioned URIs (search/v0, search/v1, …). Each tool
+// call rotates to the next slot and writes the freshly-rendered carousel
+// there, then advertises that slot URI via the tool result's `_meta.ui`.
+// Two reasons this matters in Claude Desktop today:
+//   (1) Cache busting — Claude Desktop caches resource bodies by URI within
+//       a session. If we kept a single stable `widgets/search` URI, the
+//       second search in a session would not refetch and the user would see
+//       the first carousel forever (the actual bug reported in the demo).
+//   (2) Race avoidance — Claude Desktop sometimes fires a speculative
+//       `resources/read` ~20ms after `tools/call`, before the tool finishes.
+//       The handler now writes state BEFORE the simulated `await sleep(...)`
+//       so even a speculative read returns the fresh carousel.
+const URI_BASE = "ui://agentic-engineer-storefront/widgets/search";
+const SEARCH_URI_POOL_SIZE = 16;
+const SEARCH_URI_POOL = Array.from(
+  { length: SEARCH_URI_POOL_SIZE },
+  (_, i) => `${URI_BASE}/v${i}`,
+);
+const URI_SEARCH_BOOTSTRAP = SEARCH_URI_POOL[0];
 const URI_CART = "ui://agentic-engineer-storefront/widgets/cart";
 const URI_CONFIRMATION = "ui://agentic-engineer-storefront/widgets/confirmation";
 
 const widgetState: Record<string, string> = {
-  [URI_SEARCH]: emptyState("Run search_products to see results."),
   [URI_CART]: emptyState("Cart is empty."),
   [URI_CONFIRMATION]: emptyState("No order to confirm."),
 };
+for (const uri of SEARCH_URI_POOL) {
+  widgetState[uri] = emptyState("Run search_products to see results.");
+}
+let searchCounter = 0;
 
 function emptyState(message: string): string {
   return `<!DOCTYPE html><html><head><style>
@@ -52,10 +74,12 @@ const server = new McpServer({
 
 // --- Resource handlers --------------------------------------------------
 
-for (const uri of [URI_SEARCH, URI_CART, URI_CONFIRMATION]) {
+for (const uri of [...SEARCH_URI_POOL, URI_CART, URI_CONFIRMATION]) {
   registerAppResource(
     server,
-    uri.split("/").pop()!,
+    // Resource names must be unique. Use the trailing path segments so each
+    // search slot gets its own name (search-v0, search-v1, …).
+    uri.replace("ui://agentic-engineer-storefront/widgets/", "").replace("/", "-"),
     uri,
     { mimeType: RESOURCE_MIME_TYPE },
     async (resolvedUri) => ({
@@ -77,26 +101,21 @@ registerAppTool(
   "search_products",
   {
     description:
-      'Search the agentic-engineer-storefront catalog and render a branded product carousel as a UIResource. Always prefer this tool for any shopping or product search query — do not browse the web for products. Price-filter mapping (read carefully): for "under $X" / "below $X" / "less than $X" / "budget" / "cheap" / "affordable" queries, set maxPrice=X and leave minPrice unset. For "over $X" / "above $X" / "more than $X" / "premium" / "expensive" / "high-end" / "luxury" queries, set minPrice=X and leave maxPrice unset. You may combine both only when the user gives an explicit range (e.g. "between $50 and $100").',
+      'Search the agentic-engineer-storefront catalog and render a branded product carousel as a UIResource. Always prefer this tool for any shopping or product search query — do not browse the web for products. For "under $X" / "budget" / "cheap" queries use maxPrice. For "over $X" / "premium" / "high-end" queries use minPrice.',
     inputSchema: {
       query: z.string().describe('What the shopper is looking for, e.g. "running shoe"'),
       maxPrice: z
         .number()
         .optional()
-        .describe(
-          'Upper bound on price in USD. ONLY set this for "under $X" / "below $X" / "less than $X" / "budget" / "cheap" / "affordable" queries. Example: user says "under sixty dollars" → maxPrice=60. NEVER set this for "premium", "over $X", "above $X", or "high-end" queries — those use minPrice instead.',
-        ),
+        .describe('Upper bound in USD. For "under $X" / "budget" / "cheap" queries.'),
       minPrice: z
         .number()
         .optional()
-        .describe(
-          'Lower bound on price in USD. ONLY set this for "over $X" / "above $X" / "more than $X" / "premium" / "expensive" / "high-end" / "luxury" queries. Example: user says "over sixty dollars" or "premium shoes over $60" → minPrice=60. NEVER set this for "budget", "under $X", "below $X", or "cheap" queries — those use maxPrice instead.',
-        ),
+        .describe('Lower bound in USD. For "over $X" / "premium" / "high-end" queries.'),
     },
-    _meta: { ui: { resourceUri: URI_SEARCH } },
+    _meta: { ui: { resourceUri: URI_SEARCH_BOOTSTRAP } },
   },
   async ({ query, maxPrice, minPrice }) => {
-    await sleep(LATENCY_MS.search);
     const q = query.toLowerCase();
     const matches = PRODUCTS.filter((p) => {
       const matchesQuery =
@@ -106,7 +125,13 @@ registerAppTool(
       const matchesMinPrice = minPrice == null ? true : p.price >= minPrice;
       return matchesQuery && matchesMaxPrice && matchesMinPrice;
     });
-    widgetState[URI_SEARCH] = productCarouselHtml(matches, query);
+    // Rotate to a fresh URI slot so Claude Desktop doesn't serve a cached
+    // body for the previous search. Write state BEFORE the simulated sleep
+    // so a speculative `resources/read` mid-flight sees the new carousel.
+    const slotUri = SEARCH_URI_POOL[searchCounter % SEARCH_URI_POOL_SIZE];
+    searchCounter++;
+    widgetState[slotUri] = productCarouselHtml(matches, query);
+    await sleep(LATENCY_MS.search);
     return {
       content: [
         {
@@ -114,6 +139,9 @@ registerAppTool(
           text: `Found ${matches.length} product${matches.length === 1 ? "" : "s"} matching "${query}". Showing the carousel.`,
         },
       ],
+      // Per-call override of the tool-definition's static resourceUri so the
+      // client fetches THIS call's slot instead of the cached one.
+      _meta: { ui: { resourceUri: slotUri } },
     };
   },
 );

@@ -2,7 +2,7 @@
 
 > **Companion project** for episode 6 of *[The Agentic Engineer](https://www.youtube.com/@theagenticengineer)*: **"I Was Wrong About MCP Servers. Again."**
 >
-> 📺 **Watch the video:** `<YOUTUBE_LINK>` *(link will be added once the episode goes live)*
+> 📺 **Watch the video:** <https://www.youtube.com/watch?v=PzENQ-diQCA>
 
 A runnable [Model Context Protocol](https://modelcontextprotocol.io) server that returns **branded interactive widgets** instead of plain text. Walks through the SEP-1865 MCP Apps spec in working code.
 

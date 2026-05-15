@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agentic-engineer-storefront": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "tsx",
+        "/ABSOLUTE/PATH/TO/videos/06-mcp-ui/demo-app/src/index.ts"
+      ]
+    }
+  }
+}
